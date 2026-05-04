@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Paths, ADB_BASE_PORT};
+use crate::config::{ADB_BASE_PORT, Paths};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
