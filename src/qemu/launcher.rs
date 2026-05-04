@@ -8,6 +8,30 @@ fn kvm_available() -> bool {
         && std::fs::metadata("/dev/kvm").map(|_| true).unwrap_or(false)
 }
 
+fn base_cmd(instance: &Instance) -> Command {
+    let mut cmd = Command::new("qemu-system-x86_64");
+
+    if kvm_available() {
+        cmd.args(["-enable-kvm", "-cpu", "host"]);
+    } else {
+        cmd.args(["-cpu", "max"]);
+    }
+
+    cmd.args(["-m", &instance.ram_mb.to_string()])
+        .args(["-smp", "2"])
+        .args(["-device", "virtio-net-pci,netdev=net0"])
+        .args([
+            "-netdev",
+            &format!("user,id=net0,hostfwd=tcp::{}-:5555", instance.adb_port),
+        ])
+        .args([
+            "-monitor",
+            &format!("tcp:127.0.0.1:{},server,nowait", instance.monitor_port()),
+        ]);
+
+    cmd
+}
+
 pub fn create_disk(instance: &Instance) -> Result<()> {
     let disk_path = instance.disk_path()?;
     if disk_path.exists() {
@@ -39,6 +63,39 @@ pub fn create_disk(instance: &Instance) -> Result<()> {
     Ok(())
 }
 
+pub fn spawn_installer(instance: &Instance) -> Result<()> {
+    let disk_path = instance.disk_path()?;
+    let disk_str = disk_path
+        .to_str()
+        .ok_or_else(|| Error::Qemu("invalid disk path".to_string()))?;
+
+    let mut cmd = base_cmd(instance);
+
+    cmd.args([
+        "-drive",
+        &format!("file={},if=virtio,format=qcow2", disk_str),
+    ])
+    .args(["-cdrom", &instance.image_path])
+    .args(["-boot", "d"])
+    .args(["-display", "gtk"])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
+
+    let status = cmd
+        .status()
+        .map_err(|e| Error::Qemu(format!("failed to run qemu installer: {}", e)))?;
+
+    if !status.success() {
+        return Err(Error::Qemu(format!(
+            "qemu installer exited with status {}",
+            status
+        )));
+    }
+
+    Ok(())
+}
+
 pub fn spawn(instance: &Instance) -> Result<u32> {
     let disk_path = instance.disk_path()?;
     let disk_str = disk_path
@@ -49,35 +106,17 @@ pub fn spawn(instance: &Instance) -> Result<u32> {
     let log_file = std::fs::File::create(&log_path)
         .map_err(|e| Error::Qemu(format!("failed to create qemu log file: {}", e)))?;
 
-    let mut cmd = Command::new("qemu-system-x86_64");
+    let mut cmd = base_cmd(instance);
 
-    if kvm_available() {
-        cmd.args(["-enable-kvm", "-cpu", "host"]);
-    } else {
-        cmd.args(["-cpu", "max"]);
-    }
-
-    cmd.args(["-m", &instance.ram_mb.to_string()])
-        .args(["-smp", "2"])
-        .args([
-            "-drive",
-            &format!("file={},if=virtio,format=qcow2", disk_str),
-        ])
-        .args(["-cdrom", &instance.image_path])
-        .args(["-boot", "d"])
-        .args(["-device", "virtio-net-pci,netdev=net0"])
-        .args([
-            "-netdev",
-            &format!("user,id=net0,hostfwd=tcp::{}-:5555", instance.adb_port),
-        ])
-        .args([
-            "-monitor",
-            &format!("tcp:127.0.0.1:{},server,nowait", instance.monitor_port()),
-        ])
-        .args(["-display", "none"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(log_file);
+    cmd.args([
+        "-drive",
+        &format!("file={},if=virtio,format=qcow2", disk_str),
+    ])
+    .args(["-boot", "c"])
+    .args(["-display", "none"])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(log_file);
 
     let mut child = cmd
         .spawn()
