@@ -3,6 +3,11 @@ use std::process::{Command, Stdio};
 use crate::error::{Error, Result};
 use crate::instance::Instance;
 
+fn kvm_available() -> bool {
+    std::path::Path::new("/dev/kvm").exists()
+        && std::fs::metadata("/dev/kvm").map(|_| true).unwrap_or(false)
+}
+
 pub fn create_disk(instance: &Instance) -> Result<()> {
     let disk_path = instance.disk_path()?;
     if disk_path.exists() {
@@ -40,9 +45,19 @@ pub fn spawn(instance: &Instance) -> Result<u32> {
         .to_str()
         .ok_or_else(|| Error::Qemu("invalid disk path".to_string()))?;
 
-    let child = Command::new("qemu-system-x86_64")
-        .args(["-enable-kvm"])
-        .args(["-m", &instance.ram_mb.to_string()])
+    let log_path = instance.dir()?.join("qemu.log");
+    let log_file = std::fs::File::create(&log_path)
+        .map_err(|e| Error::Qemu(format!("failed to create qemu log file: {}", e)))?;
+
+    let mut cmd = Command::new("qemu-system-x86_64");
+
+    if kvm_available() {
+        cmd.args(["-enable-kvm", "-cpu", "host"]);
+    } else {
+        cmd.args(["-cpu", "max"]);
+    }
+
+    cmd.args(["-m", &instance.ram_mb.to_string()])
         .args(["-smp", "2"])
         .args([
             "-drive",
@@ -62,11 +77,33 @@ pub fn spawn(instance: &Instance) -> Result<u32> {
         .args(["-display", "none"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(log_file);
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| Error::Qemu(format!("failed to spawn qemu: {}", e)))?;
 
-    Ok(child.id())
+    let pid = child.id();
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+            let detail = if log.trim().is_empty() {
+                format!("exit status {}", status)
+            } else {
+                format!("exit status {}: {}", status, log.trim())
+            };
+            Err(Error::Qemu(format!(
+                "qemu exited immediately ({}); log at {}",
+                detail,
+                log_path.display()
+            )))
+        }
+        Ok(None) => Ok(pid),
+        Err(e) => Err(Error::Qemu(format!("failed to poll qemu status: {}", e))),
+    }
 }
 
 pub fn stop(instance: &Instance) -> Result<()> {
