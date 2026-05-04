@@ -169,6 +169,8 @@ fn cmd_shell(name: String) -> Result<()> {
     }
 
     adb::bridge::connect(inst.adb_port)?;
+    println!("waiting for device to come online...");
+    adb::bridge::wait_for_device(inst.adb_port)?;
     adb::bridge::shell(inst.adb_port)
 }
 

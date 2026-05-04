@@ -21,6 +21,22 @@ pub fn connect(port: u16) -> Result<()> {
     Ok(())
 }
 
+pub fn wait_for_device(port: u16) -> Result<()> {
+    let status = Command::new("adb")
+        .args(["-s", &serial(port), "wait-for-device"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| Error::Adb(format!("failed to run adb wait-for-device: {}", e)))?;
+
+    if !status.success() {
+        return Err(Error::Adb("adb wait-for-device failed".to_string()));
+    }
+
+    Ok(())
+}
+
 pub fn disconnect(port: u16) -> Result<()> {
     let _ = Command::new("adb")
         .args(["disconnect", &serial(port)])
