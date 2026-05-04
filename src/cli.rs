@@ -25,6 +25,8 @@ pub enum Commands {
         #[arg(long, default_value_t = DEFAULT_DISK_GB, help = "Disk size in gigabytes")]
         disk: u32,
     },
+    #[command(about = "Install Android into an instance (runs once with display)")]
+    Setup { name: String },
     #[command(about = "Start an instance")]
     Start { name: String },
     #[command(about = "Stop a running instance")]
@@ -36,7 +38,7 @@ pub enum Commands {
     #[command(about = "Open an ADB shell into a running instance")]
     Shell { name: String },
     #[command(about = "Install an APK into a running instance")]
-    Install { name: String, apk: String },
+    InstallApk { name: String, apk: String },
     #[command(about = "Destroy an instance and all its data")]
     Destroy {
         name: String,
