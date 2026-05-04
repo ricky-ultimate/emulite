@@ -29,12 +29,13 @@ fn run() -> Result<()> {
             ram,
             disk,
         } => cmd_create(name, image, ram, disk),
+        Commands::Setup { name } => cmd_setup(name),
         Commands::Start { name } => cmd_start(name),
         Commands::Stop { name } => cmd_stop(name),
         Commands::List => cmd_list(),
         Commands::Ps => cmd_ps(),
         Commands::Shell { name } => cmd_shell(name),
-        Commands::Install { name, apk } => cmd_install(name, apk),
+        Commands::InstallApk { name, apk } => cmd_install_apk(name, apk),
         Commands::Destroy { name, force } => cmd_destroy(name, force),
     }
 }
@@ -58,12 +59,48 @@ fn cmd_create(name: String, image: String, ram: u32, disk: u32) -> Result<()> {
     qemu::launcher::create_disk(&inst)?;
     inst.save()?;
 
-    println!("created instance '{}' on adb port {}", name, port);
+    println!("created instance '{}'", name);
+    println!("run 'emulite setup {}' to install Android", name);
+    Ok(())
+}
+
+fn cmd_setup(name: String) -> Result<()> {
+    let mut inst = Instance::load(&name)?;
+
+    if inst.installed {
+        eprintln!("warning: '{}' is already marked as installed", name);
+        eprintln!("if you want to reinstall, destroy and recreate the instance");
+        return Ok(());
+    }
+
+    if inst.state == State::Running && inst.is_alive() {
+        return Err(Error::InstanceAlreadyRunning(name));
+    }
+
+    println!("starting installer for '{}'", name);
+    println!(
+        "install Android to the virtio disk inside the QEMU window, then power off the VM when done"
+    );
+
+    qemu::launcher::spawn_installer(&inst)?;
+
+    inst.installed = true;
+    inst.save()?;
+
+    println!("setup complete for '{}'", name);
+    println!("run 'emulite start {}' to boot", name);
     Ok(())
 }
 
 fn cmd_start(name: String) -> Result<()> {
     let mut inst = Instance::load(&name)?;
+
+    if !inst.installed {
+        return Err(Error::Qemu(format!(
+            "instance '{}' has not been set up; run 'emulite setup {}'",
+            name, name
+        )));
+    }
 
     if inst.state == State::Running && inst.is_alive() {
         return Err(Error::InstanceAlreadyRunning(name));
@@ -79,7 +116,7 @@ fn cmd_start(name: String) -> Result<()> {
         name, pid, inst.adb_port
     );
     println!(
-        "run 'emulite shell {}' once android has finished booting",
+        "run 'emulite shell {}' once Android has finished booting",
         name
     );
     Ok(())
@@ -112,10 +149,10 @@ fn cmd_list() -> Result<()> {
     }
 
     println!(
-        "{:<20} {:<10} {:<10} {:<6} {}",
-        "NAME", "STATE", "RAM (MB)", "PORT", "IMAGE"
+        "{:<20} {:<10} {:<12} {:<10} {:<6} {}",
+        "NAME", "STATE", "INSTALLED", "RAM (MB)", "PORT", "IMAGE"
     );
-    println!("{}", "-".repeat(72));
+    println!("{}", "-".repeat(84));
 
     for inst in instances {
         let effective_state = if inst.state == State::Running && !inst.is_alive() {
@@ -128,8 +165,13 @@ fn cmd_list() -> Result<()> {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| inst.image_path.clone());
         println!(
-            "{:<20} {:<10} {:<10} {:<6} {}",
-            inst.name, effective_state, inst.ram_mb, inst.adb_port, image_name
+            "{:<20} {:<10} {:<12} {:<10} {:<6} {}",
+            inst.name,
+            effective_state,
+            if inst.installed { "yes" } else { "no" },
+            inst.ram_mb,
+            inst.adb_port,
+            image_name
         );
     }
 
@@ -174,7 +216,7 @@ fn cmd_shell(name: String) -> Result<()> {
     adb::bridge::shell(inst.adb_port)
 }
 
-fn cmd_install(name: String, apk: String) -> Result<()> {
+fn cmd_install_apk(name: String, apk: String) -> Result<()> {
     let inst = Instance::load(&name)?;
 
     if inst.state != State::Running || !inst.is_alive() {
@@ -190,6 +232,7 @@ fn cmd_install(name: String, apk: String) -> Result<()> {
     }
 
     adb::bridge::connect(inst.adb_port)?;
+    adb::bridge::wait_for_device(inst.adb_port)?;
     adb::bridge::install(inst.adb_port, apk_path)?;
     println!("installed '{}' on '{}'", apk, name);
     Ok(())
