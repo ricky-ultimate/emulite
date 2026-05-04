@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{ADB_BASE_PORT, Paths};
+use crate::config::{Paths, ADB_BASE_PORT};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -66,7 +66,13 @@ impl Instance {
         let Some(pid) = self.pid else {
             return false;
         };
-        std::path::Path::new(&format!("/proc/{}", pid)).exists()
+        let status_path = format!("/proc/{}/status", pid);
+        match std::fs::read_to_string(&status_path) {
+            Ok(content) => !content
+                .lines()
+                .any(|line| line.starts_with("State:") && line.contains('Z')),
+            Err(_) => false,
+        }
     }
 
     pub fn load(name: &str) -> Result<Self> {
