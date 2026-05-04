@@ -31,6 +31,8 @@ pub struct Instance {
     pub adb_port: u16,
     pub state: State,
     pub pid: Option<u32>,
+    #[serde(default)]
+    pub installed: bool,
 }
 
 impl Instance {
@@ -43,6 +45,7 @@ impl Instance {
             adb_port,
             state: State::Stopped,
             pid: None,
+            installed: false,
         }
     }
 
